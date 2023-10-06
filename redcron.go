@@ -52,7 +52,7 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 					case <-tkr.C:
 						var ok bool
 						func() {
-							rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second/2)
+							rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
 							defer rctxCancel()
 							ok = r.set(rctx, tm, false)
 						}()
@@ -68,7 +68,7 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 			fctxCancel()
 			wg.Wait()
 
-			rctx, rctxCancel := context.WithTimeout(ctx, time.Second/2)
+			rctx, rctxCancel := context.WithTimeout(ctx, time.Second)
 			defer rctxCancel()
 			r.set(rctx, tm, true)
 		}()
