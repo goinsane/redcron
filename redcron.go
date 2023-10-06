@@ -82,11 +82,11 @@ func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 		if d <= 0 {
 			return r.del(ctx)
 		}
-		d2 := d.Truncate(time.Second)
+		/*d2 := d.Truncate(time.Second)
 		if d-d2 > 0 {
 			d2 += time.Second
 		}
-		d = d2
+		d = d2*/
 	}
 	cmd := r.Client.Set(ctx, r.Name, tm.Unix(), d)
 	if e := cmd.Err(); e != nil {
