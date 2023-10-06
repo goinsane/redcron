@@ -79,7 +79,7 @@ func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 	d := time.Duration(r.RepeatSec) * time.Second
 	if finish {
 		d -= time.Now().Sub(tm)
-		if d < 0 {
+		if d <= 0 {
 			return r.del(ctx)
 		}
 	}
