@@ -90,7 +90,7 @@ func (r *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
 		r.onError(e)
 		return false
 	}
-	return cmd.Val()
+	return !cmd.Val()
 }
 
 func (r *RedCron) del(ctx context.Context) (ok bool) {
@@ -104,6 +104,6 @@ func (r *RedCron) del(ctx context.Context) (ok bool) {
 
 func (r *RedCron) onError(err error) {
 	if r.OnError != nil {
-		r.onError(err)
+		r.OnError(err)
 	}
 }
