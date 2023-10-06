@@ -18,7 +18,6 @@ type RedCron struct {
 }
 
 func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
-	last := int64(0)
 	for ctx.Err() == nil {
 		var tm time.Time
 		select {
@@ -27,14 +26,7 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
 		}
 
-		u := tm.Unix()
-
-		if last >= u {
-			continue
-		}
-		last = u
-
-		if (u-int64(r.OffsetSec))%int64(r.RepeatSec) != 0 {
+		if (tm.Unix()-int64(r.OffsetSec))%int64(r.RepeatSec) != 0 {
 			continue
 		}
 
@@ -62,7 +54,7 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 						func() {
 							rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second/2)
 							defer rctxCancel()
-							ok = r.set(rctx, tm)
+							ok = r.set(rctx, tm, false)
 						}()
 						if !ok {
 							fctxCancel()
@@ -78,13 +70,20 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 
 			rctx, rctxCancel := context.WithTimeout(ctx, time.Second/2)
 			defer rctxCancel()
-			r.del(rctx)
+			r.set(rctx, tm, true)
 		}()
 	}
 }
 
-func (r *RedCron) set(ctx context.Context, tm time.Time) (ok bool) {
-	cmd := r.Client.Set(ctx, r.Name, tm.Unix(), time.Duration(r.RepeatSec)*time.Second)
+func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
+	d := time.Duration(r.RepeatSec) * time.Second
+	if finish {
+		d -= time.Now().Sub(tm)
+		if d < 0 {
+			return r.del(ctx)
+		}
+	}
+	cmd := r.Client.Set(ctx, r.Name, tm.Unix(), d)
 	if e := cmd.Err(); e != nil {
 		r.onError(e)
 		return false
@@ -98,7 +97,7 @@ func (r *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
 		r.onError(e)
 		return false
 	}
-	return !cmd.Val()
+	return cmd.Val()
 }
 
 func (r *RedCron) del(ctx context.Context) (ok bool) {
