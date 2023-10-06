@@ -18,15 +18,23 @@ type RedCron struct {
 }
 
 func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
+	last := int64(0)
 	for ctx.Err() == nil {
 		var tm time.Time
 		select {
 		case <-ctx.Done():
 			return
-		case tm = <-time.After(time.Second + time.Duration(rand.Int63n(int64(time.Second)/8))):
+		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
 		}
 
-		if (tm.Unix()-int64(r.OffsetSec))%int64(r.RepeatSec) != 0 {
+		u := tm.Unix()
+
+		if last >= u {
+			continue
+		}
+		last = u
+
+		if (u-int64(r.OffsetSec))%int64(r.RepeatSec) != 0 {
 			continue
 		}
 
