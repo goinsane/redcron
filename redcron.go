@@ -77,9 +77,7 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 
 func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
 	d := time.Duration(r.RepeatSec) * time.Second
-	if !finish {
-		d += time.Second
-	} else {
+	if finish {
 		d -= time.Now().Sub(tm)
 		if d <= 0 {
 			return r.del(ctx)
@@ -99,7 +97,7 @@ func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 }
 
 func (r *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
-	cmd := r.Client.SetNX(ctx, r.Name, tm.Unix(), time.Duration(r.RepeatSec)*time.Second+time.Second)
+	cmd := r.Client.SetNX(ctx, r.Name, tm.Unix(), time.Duration(r.RepeatSec)*time.Second)
 	if e := cmd.Err(); e != nil {
 		r.onError(e)
 		return false
