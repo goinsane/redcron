@@ -68,7 +68,7 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 			fctxCancel()
 			wg.Wait()
 
-			rctx, rctxCancel := context.WithTimeout(ctx, time.Second)
+			rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
 			defer rctxCancel()
 			r.set(rctx, tm, true)
 		}()
