@@ -4,27 +4,38 @@ import (
 	"context"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type RedCron struct {
-	cfg    Config
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cfg      Config
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopping int32
 }
 
 func New(cfg Config) (r *RedCron) {
-	r = &RedCron{cfg: cfg}
+	r = &RedCron{
+		cfg: cfg,
+	}
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	return r
 }
 
-func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
-	for ctx.Err() == nil {
+func (r *RedCron) Run(f func(context.Context)) {
+	if r.stopping != 0 {
+		return
+	}
+
+	r.wg.Add(1)
+	defer r.wg.Done()
+
+	for r.ctx.Err() == nil && r.stopping == 0 {
 		var tm time.Time
 		select {
-		case <-ctx.Done():
+		case <-r.ctx.Done():
 			return
 		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
 		}
@@ -33,12 +44,12 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 			continue
 		}
 
-		if !r.setNX(ctx, tm) {
+		if !r.setNX(r.ctx, tm) {
 			continue
 		}
 
 		func() {
-			fctx, fctxCancel := context.WithCancel(ctx)
+			fctx, fctxCancel := context.WithCancel(r.ctx)
 			defer fctxCancel()
 
 			var wg sync.WaitGroup
@@ -76,6 +87,26 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 			r.set(rctx, tm, true)
 		}()
 	}
+}
+
+func (r *RedCron) Stop(ctx context.Context) {
+	if !atomic.CompareAndSwapInt32(&r.stopping, 0, 1) {
+		return
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(stopped)
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-stopped:
+	}
+
+	r.cancel()
+	<-stopped
 }
 
 func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
