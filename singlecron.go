@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type RedCron struct {
+type SingleCron struct {
 	cfg       Config
 	name      string
 	repeatSec int
@@ -19,8 +19,8 @@ type RedCron struct {
 	stopping  int32
 }
 
-func New(cfg Config, name string, repeatSec int, offsetSec int) (c *RedCron) {
-	c = &RedCron{
+func NewSingleCron(cfg Config, name string, repeatSec int, offsetSec int) (c *SingleCron) {
+	c = &SingleCron{
 		cfg:       cfg,
 		name:      name,
 		repeatSec: repeatSec,
@@ -30,7 +30,7 @@ func New(cfg Config, name string, repeatSec int, offsetSec int) (c *RedCron) {
 	return c
 }
 
-func (c *RedCron) Run(f func(context.Context)) {
+func (c *SingleCron) Run(f func(context.Context)) {
 	if c.stopping != 0 {
 		return
 	}
@@ -95,7 +95,7 @@ func (c *RedCron) Run(f func(context.Context)) {
 	}
 }
 
-func (c *RedCron) Stop(ctx context.Context) {
+func (c *SingleCron) Stop(ctx context.Context) {
 	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
 		return
 	}
@@ -115,7 +115,7 @@ func (c *RedCron) Stop(ctx context.Context) {
 	<-stopped
 }
 
-func (c *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
+func (c *SingleCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
 	d := time.Duration(c.repeatSec) * time.Second
 	if !finish {
 		d += time.Second
@@ -139,7 +139,7 @@ func (c *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 	return true
 }
 
-func (c *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
+func (c *SingleCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
 	cmd := c.cfg.Client.SetNX(ctx, c.name, tm.Unix(), time.Duration(c.repeatSec)*time.Second+time.Second)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e)
@@ -148,7 +148,7 @@ func (c *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
 	return cmd.Val()
 }
 
-func (c *RedCron) del(ctx context.Context) (ok bool) {
+func (c *SingleCron) del(ctx context.Context) (ok bool) {
 	cmd := c.cfg.Client.Del(ctx, c.name)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e)
