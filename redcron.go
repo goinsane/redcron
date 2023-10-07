@@ -10,31 +10,31 @@ import (
 )
 
 type RedCron struct {
-	cfg       Config
-	name      string
-	repeatSec int
-	offsetSec int
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	stopping  int32
+	cfg      Config
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopping int32
 }
 
-func New(cfg Config, name string, repeatSec int, offsetSec int) (c *RedCron) {
-	if repeatSec <= 0 {
-		panic(errors.New("repeatSec must be greater than zero"))
-	}
+func New(cfg Config) (c *RedCron) {
 	c = &RedCron{
-		cfg:       cfg,
-		name:      name,
-		repeatSec: repeatSec,
-		offsetSec: offsetSec,
+		cfg: cfg,
 	}
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	return c
 }
 
-func (c *RedCron) Run(f func(context.Context)) {
+func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.Context)) {
+	cp := cronProperties{
+		name:      name,
+		repeatSec: repeatSec,
+		offsetSec: offsetSec,
+	}
+	if cp.repeatSec <= 0 {
+		panic(errors.New("repeatSec must be greater than zero"))
+	}
+
 	if c.stopping != 0 {
 		return
 	}
@@ -50,11 +50,11 @@ func (c *RedCron) Run(f func(context.Context)) {
 		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
 		}
 
-		if (tm.Unix()-int64(c.offsetSec))%int64(c.repeatSec) != 0 {
+		if (tm.Unix()-int64(cp.offsetSec))%int64(cp.repeatSec) != 0 {
 			continue
 		}
 
-		if !c.setNX(c.ctx, tm) {
+		if !c.setNX(c.ctx, cp, tm) {
 			continue
 		}
 
@@ -78,7 +78,7 @@ func (c *RedCron) Run(f func(context.Context)) {
 						func() {
 							rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
 							defer rctxCancel()
-							ok = c.set(rctx, tm, false)
+							ok = c.set(rctx, cp, tm, false)
 						}()
 						if !ok {
 							fctxCancel()
@@ -94,7 +94,7 @@ func (c *RedCron) Run(f func(context.Context)) {
 
 			rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
 			defer rctxCancel()
-			c.set(rctx, tm, true)
+			c.set(rctx, cp, tm, true)
 		}()
 	}
 }
@@ -119,15 +119,15 @@ func (c *RedCron) Stop(ctx context.Context) {
 	<-stopped
 }
 
-func (c *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
-	d := time.Duration(c.repeatSec) * time.Second
+func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time, finish bool) (ok bool) {
+	d := time.Duration(cp.repeatSec) * time.Second
 	if !finish {
 		d += time.Second
 	} else {
 		now := time.Now()
 		d -= now.Sub(tm)
 		if d <= 0 {
-			return c.del(ctx)
+			return c.del(ctx, cp)
 		}
 		t := now.Add(d).Truncate(time.Second)
 		if now.After(t) {
@@ -135,7 +135,7 @@ func (c *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 		}
 		d = t.Sub(now)
 	}
-	cmd := c.cfg.Client.Set(ctx, c.name, tm.Unix(), d)
+	cmd := c.cfg.Client.Set(ctx, cp.name, tm.Unix(), d)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e)
 		return false
@@ -143,8 +143,8 @@ func (c *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 	return true
 }
 
-func (c *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
-	cmd := c.cfg.Client.SetNX(ctx, c.name, tm.Unix(), time.Duration(c.repeatSec)*time.Second+time.Second)
+func (c *RedCron) setNX(ctx context.Context, cp cronProperties, tm time.Time) (ok bool) {
+	cmd := c.cfg.Client.SetNX(ctx, cp.name, tm.Unix(), time.Duration(cp.repeatSec)*time.Second+time.Second)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e)
 		return false
@@ -152,11 +152,17 @@ func (c *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
 	return cmd.Val()
 }
 
-func (c *RedCron) del(ctx context.Context) (ok bool) {
-	cmd := c.cfg.Client.Del(ctx, c.name)
+func (c *RedCron) del(ctx context.Context, cp cronProperties) (ok bool) {
+	cmd := c.cfg.Client.Del(ctx, cp.name)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e)
 		return false
 	}
 	return cmd.Val() >= 1
+}
+
+type cronProperties struct {
+	name      string
+	repeatSec int
+	offsetSec int
 }
