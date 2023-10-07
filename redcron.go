@@ -2,13 +2,14 @@ package redcron
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-type SingleCron struct {
+type RedCron struct {
 	cfg       Config
 	name      string
 	repeatSec int
@@ -19,8 +20,11 @@ type SingleCron struct {
 	stopping  int32
 }
 
-func NewSingleCron(cfg Config, name string, repeatSec int, offsetSec int) (c *SingleCron) {
-	c = &SingleCron{
+func New(cfg Config, name string, repeatSec int, offsetSec int) (c *RedCron) {
+	if repeatSec <= 0 {
+		panic(errors.New("repeatSec must be greater than zero"))
+	}
+	c = &RedCron{
 		cfg:       cfg,
 		name:      name,
 		repeatSec: repeatSec,
@@ -30,7 +34,7 @@ func NewSingleCron(cfg Config, name string, repeatSec int, offsetSec int) (c *Si
 	return c
 }
 
-func (c *SingleCron) Run(f func(context.Context)) {
+func (c *RedCron) Run(f func(context.Context)) {
 	if c.stopping != 0 {
 		return
 	}
@@ -95,7 +99,7 @@ func (c *SingleCron) Run(f func(context.Context)) {
 	}
 }
 
-func (c *SingleCron) Stop(ctx context.Context) {
+func (c *RedCron) Stop(ctx context.Context) {
 	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
 		return
 	}
@@ -115,7 +119,7 @@ func (c *SingleCron) Stop(ctx context.Context) {
 	<-stopped
 }
 
-func (c *SingleCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
+func (c *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
 	d := time.Duration(c.repeatSec) * time.Second
 	if !finish {
 		d += time.Second
@@ -139,7 +143,7 @@ func (c *SingleCron) set(ctx context.Context, tm time.Time, finish bool) (ok boo
 	return true
 }
 
-func (c *SingleCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
+func (c *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
 	cmd := c.cfg.Client.SetNX(ctx, c.name, tm.Unix(), time.Duration(c.repeatSec)*time.Second+time.Second)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e)
@@ -148,7 +152,7 @@ func (c *SingleCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
 	return cmd.Val()
 }
 
-func (c *SingleCron) del(ctx context.Context) (ok bool) {
+func (c *RedCron) del(ctx context.Context) (ok bool) {
 	cmd := c.cfg.Client.Del(ctx, c.name)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e)
