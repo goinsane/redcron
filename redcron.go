@@ -19,43 +19,43 @@ type RedCron struct {
 	stopping  int32
 }
 
-func New(cfg Config, name string, repeatSec int, offsetSec int) (r *RedCron) {
-	r = &RedCron{
+func New(cfg Config, name string, repeatSec int, offsetSec int) (c *RedCron) {
+	c = &RedCron{
 		cfg:       cfg,
 		name:      name,
 		repeatSec: repeatSec,
 		offsetSec: offsetSec,
 	}
-	r.ctx, r.cancel = context.WithCancel(context.Background())
-	return r
+	c.ctx, c.cancel = context.WithCancel(context.Background())
+	return c
 }
 
-func (r *RedCron) Run(f func(context.Context)) {
-	if r.stopping != 0 {
+func (c *RedCron) Run(f func(context.Context)) {
+	if c.stopping != 0 {
 		return
 	}
 
-	r.wg.Add(1)
-	defer r.wg.Done()
+	c.wg.Add(1)
+	defer c.wg.Done()
 
-	for r.ctx.Err() == nil && r.stopping == 0 {
+	for c.ctx.Err() == nil && c.stopping == 0 {
 		var tm time.Time
 		select {
-		case <-r.ctx.Done():
+		case <-c.ctx.Done():
 			return
 		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
 		}
 
-		if (tm.Unix()-int64(r.offsetSec))%int64(r.repeatSec) != 0 {
+		if (tm.Unix()-int64(c.offsetSec))%int64(c.repeatSec) != 0 {
 			continue
 		}
 
-		if !r.setNX(r.ctx, tm) {
+		if !c.setNX(c.ctx, tm) {
 			continue
 		}
 
 		func() {
-			fctx, fctxCancel := context.WithCancel(r.ctx)
+			fctx, fctxCancel := context.WithCancel(c.ctx)
 			defer fctxCancel()
 
 			var wg sync.WaitGroup
@@ -74,7 +74,7 @@ func (r *RedCron) Run(f func(context.Context)) {
 						func() {
 							rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
 							defer rctxCancel()
-							ok = r.set(rctx, tm, false)
+							ok = c.set(rctx, tm, false)
 						}()
 						if !ok {
 							fctxCancel()
@@ -90,19 +90,19 @@ func (r *RedCron) Run(f func(context.Context)) {
 
 			rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
 			defer rctxCancel()
-			r.set(rctx, tm, true)
+			c.set(rctx, tm, true)
 		}()
 	}
 }
 
-func (r *RedCron) Stop(ctx context.Context) {
-	if !atomic.CompareAndSwapInt32(&r.stopping, 0, 1) {
+func (c *RedCron) Stop(ctx context.Context) {
+	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
 		return
 	}
 
 	stopped := make(chan struct{})
 	go func() {
-		r.wg.Wait()
+		c.wg.Wait()
 		close(stopped)
 	}()
 
@@ -111,19 +111,19 @@ func (r *RedCron) Stop(ctx context.Context) {
 	case <-stopped:
 	}
 
-	r.cancel()
+	c.cancel()
 	<-stopped
 }
 
-func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
-	d := time.Duration(r.repeatSec) * time.Second
+func (c *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
+	d := time.Duration(c.repeatSec) * time.Second
 	if !finish {
 		d += time.Second
 	} else {
 		now := time.Now()
 		d -= now.Sub(tm)
 		if d <= 0 {
-			return r.del(ctx)
+			return c.del(ctx)
 		}
 		t := now.Add(d).Truncate(time.Second)
 		if now.After(t) {
@@ -131,27 +131,27 @@ func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 		}
 		d = t.Sub(now)
 	}
-	cmd := r.cfg.Client.Set(ctx, r.name, tm.Unix(), d)
+	cmd := c.cfg.Client.Set(ctx, c.name, tm.Unix(), d)
 	if e := cmd.Err(); e != nil {
-		r.cfg.performError(e)
+		c.cfg.performError(e)
 		return false
 	}
 	return true
 }
 
-func (r *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
-	cmd := r.cfg.Client.SetNX(ctx, r.name, tm.Unix(), time.Duration(r.repeatSec)*time.Second+time.Second)
+func (c *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
+	cmd := c.cfg.Client.SetNX(ctx, c.name, tm.Unix(), time.Duration(c.repeatSec)*time.Second+time.Second)
 	if e := cmd.Err(); e != nil {
-		r.cfg.performError(e)
+		c.cfg.performError(e)
 		return false
 	}
 	return cmd.Val()
 }
 
-func (r *RedCron) del(ctx context.Context) (ok bool) {
-	cmd := r.cfg.Client.Del(ctx, r.name)
+func (c *RedCron) del(ctx context.Context) (ok bool) {
+	cmd := c.cfg.Client.Del(ctx, c.name)
 	if e := cmd.Err(); e != nil {
-		r.cfg.performError(e)
+		c.cfg.performError(e)
 		return false
 	}
 	return cmd.Val() >= 1
