@@ -5,16 +5,19 @@ import (
 	"math/rand"
 	"sync"
 	"time"
-
-	"github.com/go-redis/redis/v8"
 )
 
 type RedCron struct {
-	Client    *redis.Client
-	Name      string
-	RepeatSec int
-	OffsetSec int
-	OnError   func(error)
+	cfg    Config
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+}
+
+func New(cfg Config) (r *RedCron) {
+	r = &RedCron{cfg: cfg}
+	r.ctx, r.cancel = context.WithCancel(context.Background())
+	return r
 }
 
 func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
@@ -26,7 +29,7 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
 		}
 
-		if (tm.Unix()-int64(r.OffsetSec))%int64(r.RepeatSec) != 0 {
+		if (tm.Unix()-int64(r.cfg.OffsetSec))%int64(r.cfg.RepeatSec) != 0 {
 			continue
 		}
 
@@ -76,7 +79,7 @@ func (r *RedCron) Run(ctx context.Context, f func(context.Context)) {
 }
 
 func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
-	d := time.Duration(r.RepeatSec) * time.Second
+	d := time.Duration(r.cfg.RepeatSec) * time.Second
 	if !finish {
 		d += time.Second
 	} else {
@@ -91,34 +94,28 @@ func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 		}
 		d = t.Sub(now)
 	}
-	cmd := r.Client.Set(ctx, r.Name, tm.Unix(), d)
+	cmd := r.cfg.Client.Set(ctx, r.cfg.Name, tm.Unix(), d)
 	if e := cmd.Err(); e != nil {
-		r.onError(e)
+		r.cfg.onError(e)
 		return false
 	}
 	return true
 }
 
 func (r *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
-	cmd := r.Client.SetNX(ctx, r.Name, tm.Unix(), time.Duration(r.RepeatSec)*time.Second+time.Second)
+	cmd := r.cfg.Client.SetNX(ctx, r.cfg.Name, tm.Unix(), time.Duration(r.cfg.RepeatSec)*time.Second+time.Second)
 	if e := cmd.Err(); e != nil {
-		r.onError(e)
+		r.cfg.onError(e)
 		return false
 	}
 	return cmd.Val()
 }
 
 func (r *RedCron) del(ctx context.Context) (ok bool) {
-	cmd := r.Client.Del(ctx, r.Name)
+	cmd := r.cfg.Client.Del(ctx, r.cfg.Name)
 	if e := cmd.Err(); e != nil {
-		r.onError(e)
+		r.cfg.onError(e)
 		return false
 	}
 	return cmd.Val() >= 1
-}
-
-func (r *RedCron) onError(err error) {
-	if r.OnError != nil {
-		r.OnError(err)
-	}
 }
