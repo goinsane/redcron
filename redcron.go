@@ -9,16 +9,22 @@ import (
 )
 
 type RedCron struct {
-	cfg      Config
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	stopping int32
+	cfg       Config
+	name      string
+	repeatSec int
+	offsetSec int
+	ctx       context.Context
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	stopping  int32
 }
 
-func New(cfg Config) (r *RedCron) {
+func New(cfg Config, name string, repeatSec int, offsetSec int) (r *RedCron) {
 	r = &RedCron{
-		cfg: cfg,
+		cfg:       cfg,
+		name:      name,
+		repeatSec: repeatSec,
+		offsetSec: offsetSec,
 	}
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	return r
@@ -40,7 +46,7 @@ func (r *RedCron) Run(f func(context.Context)) {
 		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
 		}
 
-		if (tm.Unix()-int64(r.cfg.OffsetSec))%int64(r.cfg.RepeatSec) != 0 {
+		if (tm.Unix()-int64(r.offsetSec))%int64(r.repeatSec) != 0 {
 			continue
 		}
 
@@ -110,7 +116,7 @@ func (r *RedCron) Stop(ctx context.Context) {
 }
 
 func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) {
-	d := time.Duration(r.cfg.RepeatSec) * time.Second
+	d := time.Duration(r.repeatSec) * time.Second
 	if !finish {
 		d += time.Second
 	} else {
@@ -125,27 +131,27 @@ func (r *RedCron) set(ctx context.Context, tm time.Time, finish bool) (ok bool) 
 		}
 		d = t.Sub(now)
 	}
-	cmd := r.cfg.Client.Set(ctx, r.cfg.Name, tm.Unix(), d)
+	cmd := r.cfg.Client.Set(ctx, r.name, tm.Unix(), d)
 	if e := cmd.Err(); e != nil {
-		r.cfg.onError(e)
+		r.cfg.performError(e)
 		return false
 	}
 	return true
 }
 
 func (r *RedCron) setNX(ctx context.Context, tm time.Time) (ok bool) {
-	cmd := r.cfg.Client.SetNX(ctx, r.cfg.Name, tm.Unix(), time.Duration(r.cfg.RepeatSec)*time.Second+time.Second)
+	cmd := r.cfg.Client.SetNX(ctx, r.name, tm.Unix(), time.Duration(r.repeatSec)*time.Second+time.Second)
 	if e := cmd.Err(); e != nil {
-		r.cfg.onError(e)
+		r.cfg.performError(e)
 		return false
 	}
 	return cmd.Val()
 }
 
 func (r *RedCron) del(ctx context.Context) (ok bool) {
-	cmd := r.cfg.Client.Del(ctx, r.cfg.Name)
+	cmd := r.cfg.Client.Del(ctx, r.name)
 	if e := cmd.Err(); e != nil {
-		r.cfg.onError(e)
+		r.cfg.performError(e)
 		return false
 	}
 	return cmd.Val() >= 1
