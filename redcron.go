@@ -25,11 +25,12 @@ func New(cfg Config) (c *RedCron) {
 	return c
 }
 
-func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.Context)) {
+func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.Context), tags ...string) {
 	cp := cronProperties{
 		name:      name,
 		repeatSec: repeatSec,
 		offsetSec: offsetSec,
+		tags:      tags,
 	}
 	if cp.repeatSec <= 0 {
 		panic(errors.New("repeatSec must be greater than zero"))
@@ -137,7 +138,7 @@ func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time, fini
 	}
 	cmd := c.cfg.Client.Set(ctx, cp.name, tm.Unix(), d)
 	if e := cmd.Err(); e != nil {
-		c.cfg.performError(e)
+		c.cfg.performError(e, cp)
 		return false
 	}
 	return true
@@ -146,7 +147,7 @@ func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time, fini
 func (c *RedCron) setNX(ctx context.Context, cp cronProperties, tm time.Time) (ok bool) {
 	cmd := c.cfg.Client.SetNX(ctx, cp.name, tm.Unix(), time.Duration(cp.repeatSec)*time.Second+time.Second)
 	if e := cmd.Err(); e != nil {
-		c.cfg.performError(e)
+		c.cfg.performError(e, cp)
 		return false
 	}
 	return cmd.Val()
@@ -155,7 +156,7 @@ func (c *RedCron) setNX(ctx context.Context, cp cronProperties, tm time.Time) (o
 func (c *RedCron) del(ctx context.Context, cp cronProperties) (ok bool) {
 	cmd := c.cfg.Client.Del(ctx, cp.name)
 	if e := cmd.Err(); e != nil {
-		c.cfg.performError(e)
+		c.cfg.performError(e, cp)
 		return false
 	}
 	return cmd.Val() >= 1
@@ -165,4 +166,5 @@ type cronProperties struct {
 	name      string
 	repeatSec int
 	offsetSec int
+	tags      []string
 }
