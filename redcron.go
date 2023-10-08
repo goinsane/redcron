@@ -32,6 +32,9 @@ func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.
 		offsetSec: offsetSec,
 		tags:      tags,
 	}
+	if cp.name == "" {
+		panic(errors.New("name must be non-empty"))
+	}
 	if cp.repeatSec <= 0 {
 		panic(errors.New("repeatSec must be greater than zero"))
 	}
