@@ -103,6 +103,11 @@ func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.
 	}
 }
 
+func (c *RedCron) Background(name string, repeatSec int, offsetSec int, f func(context.Context), tags ...string) *RedCron {
+	go c.Run(name, repeatSec, offsetSec, f, tags...)
+	return c
+}
+
 func (c *RedCron) Stop(ctx context.Context) {
 	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
 		return
