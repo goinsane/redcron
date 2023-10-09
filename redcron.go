@@ -15,6 +15,7 @@ type RedCron struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	stopping int32
+	no       int32
 }
 
 func New(cfg Config) (c *RedCron) {
@@ -25,13 +26,28 @@ func New(cfg Config) (c *RedCron) {
 	return c
 }
 
-func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.Context), tags ...string) {
+func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.Context)) {
 	cp := cronProperties{
 		name:      name,
 		repeatSec: repeatSec,
 		offsetSec: offsetSec,
-		tags:      tags,
+		no:        atomic.AddInt32(&c.no, 1),
 	}
+	c.run(cp, f)
+}
+
+func (c *RedCron) Background(name string, repeatSec int, offsetSec int, f func(context.Context)) *RedCron {
+	cp := cronProperties{
+		name:      name,
+		repeatSec: repeatSec,
+		offsetSec: offsetSec,
+		no:        atomic.AddInt32(&c.no, 1),
+	}
+	go c.run(cp, f)
+	return c
+}
+
+func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 	if cp.name == "" {
 		panic(errors.New("name must be non-empty"))
 	}
@@ -103,11 +119,6 @@ func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.
 	}
 }
 
-func (c *RedCron) Background(name string, repeatSec int, offsetSec int, f func(context.Context), tags ...string) *RedCron {
-	go c.Run(name, repeatSec, offsetSec, f, tags...)
-	return c
-}
-
 func (c *RedCron) Stop(ctx context.Context) {
 	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
 		return
@@ -174,5 +185,5 @@ type cronProperties struct {
 	name      string
 	repeatSec int
 	offsetSec int
-	tags      []string
+	no        int32
 }
