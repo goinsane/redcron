@@ -3,10 +3,13 @@ package redcron
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-redis/redis/v8"
 )
 
 type RedCron struct {
@@ -67,7 +70,7 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 		select {
 		case <-c.ctx.Done():
 			return
-		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
+		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/4))):
 		}
 
 		if (tm.Unix()-int64(cp.offsetSec))%int64(cp.repeatSec) != 0 {
@@ -98,7 +101,7 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 						func() {
 							rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
 							defer rctxCancel()
-							ok = c.set(rctx, cp, tm, false)
+							ok = c.set(rctx, cp, tm)
 						}()
 						if !ok {
 							fctxCancel()
@@ -114,7 +117,7 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 
 			rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
 			defer rctxCancel()
-			c.set(rctx, cp, tm, true)
+			c.del(rctx, cp)
 		}()
 	}
 }
@@ -139,23 +142,8 @@ func (c *RedCron) Stop(ctx context.Context) {
 	<-stopped
 }
 
-func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time, finish bool) (ok bool) {
-	d := time.Duration(cp.repeatSec) * time.Second
-	if !finish {
-		d += time.Second
-	} else {
-		now := time.Now()
-		d -= now.Sub(tm)
-		if d <= 0 {
-			return c.del(ctx, cp)
-		}
-		t := now.Add(d).Truncate(time.Second)
-		if now.After(t) {
-			t = t.Add(time.Second)
-		}
-		d = t.Sub(now)
-	}
-	cmd := c.cfg.Client.Set(ctx, cp.name, tm.Unix(), d)
+func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time) (ok bool) {
+	cmd := c.cfg.Client.Set(ctx, genKey(cp.name), tm.Unix(), time.Minute)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e, cp)
 		return false
@@ -164,16 +152,31 @@ func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time, fini
 }
 
 func (c *RedCron) setNX(ctx context.Context, cp cronProperties, tm time.Time) (ok bool) {
-	cmd := c.cfg.Client.SetNX(ctx, cp.name, tm.Unix(), time.Duration(cp.repeatSec)*time.Second+time.Second)
+	var cmd *redis.BoolCmd
+
+	cmd = c.cfg.Client.SetNX(ctx, genTmKey(cp.name, tm), tm.Unix(), time.Duration(cp.repeatSec)*time.Second+time.Minute)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e, cp)
 		return false
 	}
-	return cmd.Val()
+	if !cmd.Val() {
+		return false
+	}
+
+	cmd = c.cfg.Client.SetNX(ctx, genKey(cp.name), tm.Unix(), time.Minute)
+	if e := cmd.Err(); e != nil {
+		c.cfg.performError(e, cp)
+		return false
+	}
+	if !cmd.Val() {
+		return false
+	}
+
+	return true
 }
 
 func (c *RedCron) del(ctx context.Context, cp cronProperties) (ok bool) {
-	cmd := c.cfg.Client.Del(ctx, cp.name)
+	cmd := c.cfg.Client.Del(ctx, genKey(cp.name))
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e, cp)
 		return false
@@ -186,4 +189,12 @@ type cronProperties struct {
 	repeatSec int
 	offsetSec int
 	no        int32
+}
+
+func genKey(name string) string {
+	return fmt.Sprintf("%q", name)
+}
+
+func genTmKey(name string, tm time.Time) string {
+	return fmt.Sprintf("%q %d", name, tm.Unix())
 }
