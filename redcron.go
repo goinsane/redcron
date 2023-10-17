@@ -100,7 +100,7 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 					case <-tkr.C:
 						var ok bool
 						func() {
-							rctx, rctxCancel := context.WithTimeout(context.Background(), redisTimeout)
+							rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
 							defer rctxCancel()
 							ok = c.set(rctx, cp, tm)
 						}()
@@ -116,7 +116,7 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 			fctxCancel()
 			wg.Wait()
 
-			rctx, rctxCancel := context.WithTimeout(context.Background(), redisTimeout)
+			rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
 			defer rctxCancel()
 			c.del(rctx, cp)
 		}()
@@ -221,7 +221,7 @@ func genVal(cp cronProperties, tm time.Time) string {
 }
 
 const (
-	redisTimeout   = 5 * time.Second
+	opTimeout      = 5 * time.Second
 	tickerInterval = 1 * time.Second
 	waitDur        = 1 * time.Minute
 )
