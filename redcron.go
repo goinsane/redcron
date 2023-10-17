@@ -78,7 +78,15 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 			continue
 		}
 
-		if !c.setNX(c.ctx, cp, tm) {
+		cont := false
+		func() {
+			rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
+			defer rctxCancel()
+			if !c.setNX(rctx, cp, tm) {
+				cont = true
+			}
+		}()
+		if cont {
 			continue
 		}
 
