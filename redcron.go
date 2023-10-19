@@ -2,11 +2,15 @@ package redcron
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-redis/redis/v8"
 )
 
 type RedCron struct {
@@ -67,14 +71,22 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 		select {
 		case <-c.ctx.Done():
 			return
-		case tm = <-time.After(time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/16))):
+		case tm = <-time.After(getDriftInterval()):
 		}
 
 		if (tm.Unix()-int64(cp.offsetSec))%int64(cp.repeatSec) != 0 {
 			continue
 		}
 
-		if !c.setNX(c.ctx, cp, tm) {
+		cont := false
+		func() {
+			rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
+			defer rctxCancel()
+			if !c.setNX(rctx, cp, tm) {
+				cont = true
+			}
+		}()
+		if cont {
 			continue
 		}
 
@@ -87,7 +99,7 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				tkr := time.NewTicker(time.Second / 2)
+				tkr := time.NewTicker(tickerInterval)
 				defer tkr.Stop()
 				for fctx.Err() == nil {
 					select {
@@ -96,9 +108,9 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 					case <-tkr.C:
 						var ok bool
 						func() {
-							rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
+							rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
 							defer rctxCancel()
-							ok = c.set(rctx, cp, tm, false)
+							ok = c.set(rctx, cp, tm)
 						}()
 						if !ok {
 							fctxCancel()
@@ -112,9 +124,9 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 			fctxCancel()
 			wg.Wait()
 
-			rctx, rctxCancel := context.WithTimeout(context.Background(), time.Second)
+			rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
 			defer rctxCancel()
-			c.set(rctx, cp, tm, true)
+			c.del(rctx, cp)
 		}()
 	}
 }
@@ -139,23 +151,8 @@ func (c *RedCron) Stop(ctx context.Context) {
 	<-stopped
 }
 
-func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time, finish bool) (ok bool) {
-	d := time.Duration(cp.repeatSec) * time.Second
-	if !finish {
-		d += time.Second
-	} else {
-		now := time.Now()
-		d -= now.Sub(tm)
-		if d <= 0 {
-			return c.del(ctx, cp)
-		}
-		t := now.Add(d).Truncate(time.Second)
-		if now.After(t) {
-			t = t.Add(time.Second)
-		}
-		d = t.Sub(now)
-	}
-	cmd := c.cfg.Client.Set(ctx, cp.name, tm.Unix(), d)
+func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time) (ok bool) {
+	cmd := c.cfg.Client.Set(ctx, genKey(cp), genVal(cp, tm), waitDur)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e, cp)
 		return false
@@ -164,16 +161,31 @@ func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time, fini
 }
 
 func (c *RedCron) setNX(ctx context.Context, cp cronProperties, tm time.Time) (ok bool) {
-	cmd := c.cfg.Client.SetNX(ctx, cp.name, tm.Unix(), time.Duration(cp.repeatSec)*time.Second+time.Second)
+	var cmd *redis.BoolCmd
+
+	cmd = c.cfg.Client.SetNX(ctx, genTmKey(cp, tm), genVal(cp, tm), waitDur+time.Duration(cp.repeatSec)*time.Second)
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e, cp)
 		return false
 	}
-	return cmd.Val()
+	if !cmd.Val() {
+		return false
+	}
+
+	cmd = c.cfg.Client.SetNX(ctx, genKey(cp), genVal(cp, tm), waitDur)
+	if e := cmd.Err(); e != nil {
+		c.cfg.performError(e, cp)
+		return false
+	}
+	if !cmd.Val() {
+		return false
+	}
+
+	return true
 }
 
 func (c *RedCron) del(ctx context.Context, cp cronProperties) (ok bool) {
-	cmd := c.cfg.Client.Del(ctx, cp.name)
+	cmd := c.cfg.Client.Del(ctx, genKey(cp))
 	if e := cmd.Err(); e != nil {
 		c.cfg.performError(e, cp)
 		return false
@@ -187,3 +199,37 @@ type cronProperties struct {
 	offsetSec int
 	no        int32
 }
+
+func getDriftInterval() time.Duration {
+	return time.Second/32 + time.Duration(rand.Int63n(int64(time.Second)/4))
+}
+
+func genKey(cp cronProperties) string {
+	return fmt.Sprintf("%q", cp.name)
+}
+
+func genTmKey(cp cronProperties, tm time.Time) string {
+	return fmt.Sprintf("%q %d", cp.name, tm.Unix())
+}
+
+func genVal(cp cronProperties, tm time.Time) string {
+	result := &struct {
+		Time      time.Time
+		Name      string
+		RepeatSec int
+		OffsetSec int
+	}{
+		Time:      tm.UTC(),
+		Name:      cp.name,
+		RepeatSec: cp.repeatSec,
+		OffsetSec: cp.offsetSec,
+	}
+	b, _ := json.Marshal(result)
+	return string(b)
+}
+
+const (
+	opTimeout      = 5 * time.Second
+	tickerInterval = 1 * time.Second
+	waitDur        = 1 * time.Minute
+)
