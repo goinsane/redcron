@@ -51,6 +51,26 @@ func (c *RedCron) Background(name string, repeatSec int, offsetSec int, f func(c
 	return c
 }
 
+func (c *RedCron) Stop(ctx context.Context) {
+	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
+		return
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(stopped)
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-stopped:
+	}
+
+	c.cancel()
+	<-stopped
+}
+
 func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 	if cp.name == "" {
 		panic(errors.New("name must be non-empty"))
@@ -129,26 +149,6 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 			c.del(rctx, cp)
 		}()
 	}
-}
-
-func (c *RedCron) Stop(ctx context.Context) {
-	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
-		return
-	}
-
-	stopped := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(stopped)
-	}()
-
-	select {
-	case <-ctx.Done():
-	case <-stopped:
-	}
-
-	c.cancel()
-	<-stopped
 }
 
 func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time) (ok bool) {
