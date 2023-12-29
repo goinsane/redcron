@@ -2,6 +2,7 @@ package redcron
 
 import "github.com/redis/go-redis/v9"
 
+// Config holds RedCron config.
 type Config struct {
 	Client  *redis.Client
 	OnError func(err error, name string)

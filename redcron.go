@@ -1,3 +1,5 @@
+// package redcron provides RedCron struct to run cron jobs periodically.
+
 package redcron
 
 import (
@@ -13,6 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// RedCron registers and runs cron jobs.
 type RedCron struct {
 	cfg      Config
 	ctx      context.Context
@@ -23,6 +26,7 @@ type RedCron struct {
 	stopping int32
 }
 
+// New creates a new RedCron struct.
 func New(cfg Config) (c *RedCron) {
 	c = &RedCron{
 		cfg:   cfg,
@@ -32,6 +36,7 @@ func New(cfg Config) (c *RedCron) {
 	return c
 }
 
+// Register registers a new cron job by the given parameters. It returns the underlying RedCron.
 func (c *RedCron) Register(name string, repeatSec int, offsetSec int, f func(context.Context)) *RedCron {
 	if name == "" {
 		panic(errors.New("name must be non-empty"))
@@ -54,6 +59,8 @@ func (c *RedCron) Register(name string, repeatSec int, offsetSec int, f func(con
 	return c
 }
 
+// Stop stops triggering cron jobs and waits for all jobs are finished.
+// When ctx has been done, all contexts of jobs are cancelled.
 func (c *RedCron) Stop(ctx context.Context) {
 	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
 		return
