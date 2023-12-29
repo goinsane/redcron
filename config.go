@@ -1,6 +1,6 @@
 package redcron
 
-import "github.com/go-redis/redis/v8"
+import "github.com/redis/go-redis/v9"
 
 type Config struct {
 	Client  *redis.Client
