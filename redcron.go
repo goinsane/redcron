@@ -1,4 +1,4 @@
-// Package redcron provides RedCron struct to run cron jobs periodically.
+// Package redcron provides RedCron struct to run cron jobs periodically by using Redis.
 
 package redcron
 
