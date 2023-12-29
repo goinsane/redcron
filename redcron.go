@@ -18,35 +18,38 @@ type RedCron struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
+	crons    map[string]cronProperties
+	cronsMu  sync.Mutex
 	stopping int32
-	no       int32
 }
 
 func New(cfg Config) (c *RedCron) {
 	c = &RedCron{
-		cfg: cfg,
+		cfg:   cfg,
+		crons: make(map[string]cronProperties),
 	}
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	return c
 }
 
-func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.Context)) {
+func (c *RedCron) Register(name string, repeatSec int, offsetSec int, f func(context.Context)) *RedCron {
+	if name == "" {
+		panic(errors.New("name must be non-empty"))
+	}
+	if repeatSec <= 0 {
+		panic(errors.New("repeatSec must be greater than zero"))
+	}
 	cp := cronProperties{
 		name:      name,
 		repeatSec: repeatSec,
 		offsetSec: offsetSec,
-		no:        atomic.AddInt32(&c.no, 1),
 	}
-	c.run(cp, f)
-}
-
-func (c *RedCron) Background(name string, repeatSec int, offsetSec int, f func(context.Context)) *RedCron {
-	cp := cronProperties{
-		name:      name,
-		repeatSec: repeatSec,
-		offsetSec: offsetSec,
-		no:        atomic.AddInt32(&c.no, 1),
+	c.cronsMu.Lock()
+	defer c.cronsMu.Unlock()
+	if _, ok := c.crons[name]; ok {
+		panic(fmt.Errorf("cron %q already registered", name))
 	}
+	c.crons[name] = cp
 	go c.run(cp, f)
 	return c
 }
@@ -72,17 +75,6 @@ func (c *RedCron) Stop(ctx context.Context) {
 }
 
 func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
-	if cp.name == "" {
-		panic(errors.New("name must be non-empty"))
-	}
-	if cp.repeatSec <= 0 {
-		panic(errors.New("repeatSec must be greater than zero"))
-	}
-
-	if c.stopping != 0 {
-		return
-	}
-
 	c.wg.Add(1)
 	defer c.wg.Done()
 
@@ -199,7 +191,6 @@ type cronProperties struct {
 	name      string
 	repeatSec int
 	offsetSec int
-	no        int32
 }
 
 func getDriftInterval() time.Duration {
