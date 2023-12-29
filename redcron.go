@@ -100,8 +100,8 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 
 		cont := false
 		func() {
-			rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
-			defer rctxCancel()
+			rctx, rcancel := context.WithTimeout(context.Background(), opTimeout)
+			defer rcancel()
 			if !c.setNX(rctx, cp, tm) {
 				cont = true
 			}
@@ -111,8 +111,8 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 		}
 
 		func() {
-			fctx, fctxCancel := context.WithCancel(c.ctx)
-			defer fctxCancel()
+			fctx, fcancel := context.WithCancel(c.ctx)
+			defer fcancel()
 
 			var wg sync.WaitGroup
 
@@ -128,12 +128,12 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 					case <-tkr.C:
 						var ok bool
 						func() {
-							rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
-							defer rctxCancel()
+							rctx, rcancel := context.WithTimeout(context.Background(), opTimeout)
+							defer rcancel()
 							ok = c.set(rctx, cp, tm)
 						}()
 						if !ok {
-							fctxCancel()
+							fcancel()
 							return
 						}
 					}
@@ -141,12 +141,14 @@ func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 			}()
 
 			f(fctx)
-			fctxCancel()
+			fcancel()
 			wg.Wait()
 
-			rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
-			defer rctxCancel()
-			c.del(rctx, cp)
+			func() {
+				rctx, rcancel := context.WithTimeout(context.Background(), opTimeout)
+				defer rcancel()
+				c.del(rctx, cp)
+			}()
 		}()
 	}
 }
