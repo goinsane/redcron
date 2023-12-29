@@ -1,3 +1,5 @@
+// Package redcron provides RedCron struct to run cron jobs periodically by using Redis.
+
 package redcron
 
 import (
@@ -10,127 +12,55 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
+// RedCron registers and runs cron jobs.
 type RedCron struct {
 	cfg      Config
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
+	crons    map[string]cronProperties
+	cronsMu  sync.Mutex
 	stopping int32
-	no       int32
 }
 
+// New creates a new RedCron struct.
 func New(cfg Config) (c *RedCron) {
 	c = &RedCron{
-		cfg: cfg,
+		cfg:   cfg,
+		crons: make(map[string]cronProperties),
 	}
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	return c
 }
 
-func (c *RedCron) Run(name string, repeatSec int, offsetSec int, f func(context.Context)) {
+// Register registers a new cron job by the given parameters. It returns the underlying RedCron.
+func (c *RedCron) Register(name string, repeatSec int, offsetSec int, f func(context.Context)) *RedCron {
+	if name == "" {
+		panic(errors.New("name must be non-empty"))
+	}
+	if repeatSec <= 0 {
+		panic(errors.New("repeatSec must be greater than zero"))
+	}
 	cp := cronProperties{
 		name:      name,
 		repeatSec: repeatSec,
 		offsetSec: offsetSec,
-		no:        atomic.AddInt32(&c.no, 1),
 	}
-	c.run(cp, f)
-}
-
-func (c *RedCron) Background(name string, repeatSec int, offsetSec int, f func(context.Context)) *RedCron {
-	cp := cronProperties{
-		name:      name,
-		repeatSec: repeatSec,
-		offsetSec: offsetSec,
-		no:        atomic.AddInt32(&c.no, 1),
+	c.cronsMu.Lock()
+	defer c.cronsMu.Unlock()
+	if _, ok := c.crons[name]; ok {
+		panic(fmt.Errorf("cron %q already registered", name))
 	}
+	c.crons[name] = cp
 	go c.run(cp, f)
 	return c
 }
 
-func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
-	if cp.name == "" {
-		panic(errors.New("name must be non-empty"))
-	}
-	if cp.repeatSec <= 0 {
-		panic(errors.New("repeatSec must be greater than zero"))
-	}
-
-	if c.stopping != 0 {
-		return
-	}
-
-	c.wg.Add(1)
-	defer c.wg.Done()
-
-	for c.ctx.Err() == nil && c.stopping == 0 {
-		var tm time.Time
-		select {
-		case <-c.ctx.Done():
-			return
-		case tm = <-time.After(getDriftInterval()):
-		}
-
-		if (tm.Unix()-int64(cp.offsetSec))%int64(cp.repeatSec) != 0 {
-			continue
-		}
-
-		cont := false
-		func() {
-			rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
-			defer rctxCancel()
-			if !c.setNX(rctx, cp, tm) {
-				cont = true
-			}
-		}()
-		if cont {
-			continue
-		}
-
-		func() {
-			fctx, fctxCancel := context.WithCancel(c.ctx)
-			defer fctxCancel()
-
-			var wg sync.WaitGroup
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				tkr := time.NewTicker(tickerInterval)
-				defer tkr.Stop()
-				for fctx.Err() == nil {
-					select {
-					case <-fctx.Done():
-						return
-					case <-tkr.C:
-						var ok bool
-						func() {
-							rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
-							defer rctxCancel()
-							ok = c.set(rctx, cp, tm)
-						}()
-						if !ok {
-							fctxCancel()
-							return
-						}
-					}
-				}
-			}()
-
-			f(fctx)
-			fctxCancel()
-			wg.Wait()
-
-			rctx, rctxCancel := context.WithTimeout(context.Background(), opTimeout)
-			defer rctxCancel()
-			c.del(rctx, cp)
-		}()
-	}
-}
-
+// Stop stops triggering cron jobs and waits for all jobs are finished.
+// When ctx has been done, all contexts of jobs are cancelled.
 func (c *RedCron) Stop(ctx context.Context) {
 	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
 		return
@@ -149,6 +79,77 @@ func (c *RedCron) Stop(ctx context.Context) {
 
 	c.cancel()
 	<-stopped
+}
+
+func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
+	c.wg.Add(1)
+	defer c.wg.Done()
+
+	for c.ctx.Err() == nil && c.stopping == 0 {
+		var tm time.Time
+		select {
+		case <-c.ctx.Done():
+			return
+		case tm = <-time.After(getDriftInterval()):
+		}
+
+		if (tm.Unix()-int64(cp.offsetSec))%int64(cp.repeatSec) != 0 {
+			continue
+		}
+
+		cont := false
+		func() {
+			rctx, rcancel := context.WithTimeout(context.Background(), opTimeout)
+			defer rcancel()
+			if !c.setNX(rctx, cp, tm) {
+				cont = true
+			}
+		}()
+		if cont {
+			continue
+		}
+
+		func() {
+			fctx, fcancel := context.WithCancel(c.ctx)
+			defer fcancel()
+
+			var wg sync.WaitGroup
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				tkr := time.NewTicker(tickerInterval)
+				defer tkr.Stop()
+				for fctx.Err() == nil {
+					select {
+					case <-fctx.Done():
+						return
+					case <-tkr.C:
+						var ok bool
+						func() {
+							rctx, rcancel := context.WithTimeout(context.Background(), opTimeout)
+							defer rcancel()
+							ok = c.set(rctx, cp, tm)
+						}()
+						if !ok {
+							fcancel()
+							return
+						}
+					}
+				}
+			}()
+
+			f(fctx)
+			fcancel()
+			wg.Wait()
+
+			func() {
+				rctx, rcancel := context.WithTimeout(context.Background(), opTimeout)
+				defer rcancel()
+				c.del(rctx, cp)
+			}()
+		}()
+	}
 }
 
 func (c *RedCron) set(ctx context.Context, cp cronProperties, tm time.Time) (ok bool) {
@@ -197,7 +198,6 @@ type cronProperties struct {
 	name      string
 	repeatSec int
 	offsetSec int
-	no        int32
 }
 
 func getDriftInterval() time.Duration {
