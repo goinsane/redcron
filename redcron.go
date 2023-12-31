@@ -37,6 +37,7 @@ func New(cfg Config) (c *RedCron) {
 }
 
 // Register registers a new cron job by the given parameters. It returns the underlying RedCron.
+// If the underlying RedCron is stopped, registered cron jobs won't be triggered.
 func (c *RedCron) Register(name string, repeatSec int, offsetSec int, f func(context.Context)) *RedCron {
 	if name == "" {
 		panic(errors.New("name must be non-empty"))
@@ -63,9 +64,7 @@ func (c *RedCron) Register(name string, repeatSec int, offsetSec int, f func(con
 // When ctx has been done, all contexts of jobs are cancelled.
 // If ctx is nil, all contexts of jobs are cancelled immediately.
 func (c *RedCron) Stop(ctx context.Context) {
-	if !atomic.CompareAndSwapInt32(&c.stopped, 0, 1) {
-		//return
-	}
+	atomic.CompareAndSwapInt32(&c.stopped, 0, 1)
 
 	done := make(chan struct{})
 	go func() {
