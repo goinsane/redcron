@@ -17,13 +17,13 @@ import (
 
 // RedCron registers and runs cron jobs.
 type RedCron struct {
-	cfg      Config
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	crons    map[string]cronProperties
-	cronsMu  sync.Mutex
-	stopping int32
+	cfg     Config
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	crons   map[string]cronProperties
+	cronsMu sync.Mutex
+	stopped int32
 }
 
 // New creates a new RedCron struct.
@@ -61,31 +61,34 @@ func (c *RedCron) Register(name string, repeatSec int, offsetSec int, f func(con
 
 // Stop stops triggering cron jobs and waits for all jobs are finished.
 // When ctx has been done, all contexts of jobs are cancelled.
+// If ctx is nil, all contexts of jobs are cancelled immediately.
 func (c *RedCron) Stop(ctx context.Context) {
-	if !atomic.CompareAndSwapInt32(&c.stopping, 0, 1) {
-		return
+	if !atomic.CompareAndSwapInt32(&c.stopped, 0, 1) {
+		//return
 	}
 
-	stopped := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
 		c.wg.Wait()
-		close(stopped)
+		close(done)
 	}()
 
-	select {
-	case <-ctx.Done():
-	case <-stopped:
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
 	}
 
 	c.cancel()
-	<-stopped
+	<-done
 }
 
 func (c *RedCron) run(cp cronProperties, f func(context.Context)) {
 	c.wg.Add(1)
 	defer c.wg.Done()
 
-	for c.ctx.Err() == nil && c.stopping == 0 {
+	for c.ctx.Err() == nil && c.stopped == 0 {
 		var tm time.Time
 		select {
 		case <-c.ctx.Done():
